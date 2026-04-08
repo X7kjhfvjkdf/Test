@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Interactive WebGL Infinite Library - Flight through procedurally generated library inspired by Interstellar" />
+  <title>Interstellar Library - Infinite WebGL Experience</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      overflow: hidden;
+      background: #0a0a0f;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    
+    #canvas-container {
+      width: 100vw;
+      height: 100vh;
+      position: fixed;
+      top: 0;
+      left: 0;
+    }
+    
+    #loading-screen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(135deg, #0a0a0f 0%, #1a1a2e 100%);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+      transition: opacity 0.5s ease-out;
+    }
+    
+    #loading-screen.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    
+    .loading-title {
+      color: #f4a460;
+      font-size: 2.5rem;
+      margin-bottom: 2rem;
+      text-shadow: 0 0 20px rgba(244, 164, 96, 0.5);
+      letter-spacing: 3px;
+    }
+    
+    .loading-bar-container {
+      width: 300px;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    
+    .loading-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #f4a460, #daa520);
+      width: 0%;
+      transition: width 0.3s ease;
+      box-shadow: 0 0 10px rgba(244, 164, 96, 0.5);
+    }
+    
+    .loading-text {
+      color: #888;
+      margin-top: 1rem;
+      font-size: 0.9rem;
+    }
+    
+    #ui-overlay {
+      position: fixed;
+      top: 20px;
+      left: 20px;
+      z-index: 100;
+      color: #fff;
+      pointer-events: none;
+    }
+    
+    .ui-panel {
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(10px);
+      padding: 15px 20px;
+      border-radius: 8px;
+      border: 1px solid rgba(244, 164, 96, 0.3);
+      margin-bottom: 10px;
+      pointer-events: auto;
+      max-width: 300px;
+    }
+    
+    .ui-panel h3 {
+      color: #f4a460;
+      font-size: 0.9rem;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    
+    .control-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      font-size: 0.85rem;
+    }
+    
+    .control-item label {
+      color: #ccc;
+    }
+    
+    .control-item input[type="range"] {
+      width: 120px;
+      accent-color: #f4a460;
+    }
+    
+    .control-item button {
+      background: rgba(244, 164, 96, 0.2);
+      border: 1px solid #f4a460;
+      color: #f4a460;
+      padding: 4px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      transition: all 0.2s;
+    }
+    
+    .control-item button:hover {
+      background: rgba(244, 164, 96, 0.4);
+    }
+    
+    .control-item button.active {
+      background: #f4a460;
+      color: #0a0a0f;
+    }
+    
+    #fps-counter {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(10px);
+      padding: 10px 15px;
+      border-radius: 8px;
+      border: 1px solid rgba(244, 164, 96, 0.3);
+      color: #f4a460;
+      font-family: monospace;
+      font-size: 0.9rem;
+      z-index: 100;
+    }
+    
+    #start-prompt {
+      position: fixed;
+      bottom: 50px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.8);
+      backdrop-filter: blur(10px);
+      padding: 20px 40px;
+      border-radius: 12px;
+      border: 1px solid rgba(244, 164, 96, 0.5);
+      color: #fff;
+      text-align: center;
+      z-index: 200;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    
+    #start-prompt:hover {
+      background: rgba(244, 164, 96, 0.2);
+      transform: translateX(-50%) scale(1.05);
+    }
+    
+    #start-prompt.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    
+    #start-prompt h2 {
+      color: #f4a460;
+      margin-bottom: 10px;
+      font-size: 1.5rem;
+    }
+    
+    #start-prompt p {
+      color: #aaa;
+      font-size: 0.9rem;
+      line-height: 1.6;
+    }
+    
+    .key {
+      display: inline-block;
+      background: rgba(255, 255, 255, 0.1);
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin: 0 2px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+    
+    #mobile-controls {
+      display: none;
+      position: fixed;
+      bottom: 20px;
+      left: 20px;
+      right: 20px;
+      z-index: 150;
+      pointer-events: none;
+    }
+    
+    .mobile-joystick {
+      width: 120px;
+      height: 120px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 2px solid rgba(244, 164, 96, 0.5);
+      border-radius: 50%;
+      position: relative;
+      pointer-events: auto;
+    }
+    
+    .mobile-joystick-knob {
+      width: 50px;
+      height: 50px;
+      background: rgba(244, 164, 96, 0.5);
+      border-radius: 50%;
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      transition: all 0.1s;
+    }
+    
+    #joystick-left {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+    }
+    
+    #joystick-right {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+    }
+    
+    @media (max-width: 768px) {
+      #mobile-controls {
+        display: block;
+      }
+      
+      #start-prompt p {
+        font-size: 0.8rem;
+      }
+      
+      .ui-panel {
+        max-width: 250px;
+        font-size: 0.8rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="loading-screen">
+    <h1 class="loading-title">INTERSTELLAR LIBRARY</h1>
+    <div class="loading-bar-container">
+      <div class="loading-bar" id="loading-bar"></div>
+    </div>
+    <p class="loading-text" id="loading-text">Initializing...</p>
+  </div>
+  
+  <div id="canvas-container"></div>
+  
+  <div id="fps-counter">FPS: -- | Chunks: --</div>
+  
+  <div id="ui-overlay">
+    <div class="ui-panel">
+      <h3>Settings</h3>
+      <div class="control-item">
+        <label>Speed</label>
+        <input type="range" id="speed-slider" min="1" max="100" value="50" />
+      </div>
+      <div class="control-item">
+        <label>Bloom</label>
+        <input type="range" id="bloom-slider" min="0" max="100" value="60" />
+      </div>
+      <div class="control-item">
+        <label>Particles</label>
+        <button id="particles-toggle" class="active">ON</button>
+      </div>
+      <div class="control-item">
+        <label>Sound</label>
+        <button id="sound-toggle">ON</button>
+      </div>
+      <div class="control-item">
+        <label>Collisions</label>
+        <button id="collision-toggle">OFF</button>
+      </div>
+    </div>
+  </div>
+  
+  <div id="start-prompt">
+    <h2>CLICK TO START</h2>
+    <p>
+      <span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span> Move &nbsp;|&nbsp; 
+      Mouse Look &nbsp;|&nbsp; 
+      <span class="key">Shift</span> Sprint &nbsp;|&nbsp; 
+      <span class="key">Space</span> Up &nbsp;|&nbsp; 
+      <span class="key">Ctrl</span> Down<br/>
+      Click on books to interact
+    </p>
+  </div>
+  
+  <div id="mobile-controls">
+    <div class="mobile-joystick" id="joystick-left">
+      <div class="mobile-joystick-knob"></div>
+    </div>
+    <div class="mobile-joystick" id="joystick-right">
+      <div class="mobile-joystick-knob"></div>
+    </div>
+  </div>
+  
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
