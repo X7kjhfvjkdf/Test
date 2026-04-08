@@ -1,3 +1,5 @@
+# Generated entirely by Qwen Coder, please don't take it seriously.
+
 # Interstellar Library - Infinite WebGL Experience
 
 An immersive WebGL scene featuring first-person flight through an infinitely generated library, stylistically inspired by the Tesseract scene from *Interstellar*.
