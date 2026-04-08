@@ -1,318 +1,321 @@
-/**
- * ChunkManager - Procedural chunk-based library generation
- * Handles infinite terrain generation with seamless transitions
- */
-
 import * as THREE from 'three';
 import { CONFIG } from './config.js';
 
+/**
+ * Менеджер чанков с использованием InstancedMesh для высокой производительности.
+ * Генерирует реалистичную библиотеку: пол, потолок, стеллажи по стенам коридоров.
+ */
 export class ChunkManager {
-  constructor(scene, camera, settings) {
+  constructor(scene) {
     this.scene = scene;
-    this.camera = camera;
-    this.settings = settings;
-    
     this.chunks = new Map();
-    this.chunkSize = CONFIG.chunkSize;
-    this.chunkHeight = CONFIG.chunkHeight;
-    this.renderDistance = CONFIG.renderDistances[CONFIG.qualityLevel];
+    this.activeChunks = new Set();
     
-    // Materials (reused for performance)
-    this.bookshelfMaterial = null;
-    this.bookMaterials = [];
+    // Геометрии и материалы (переиспользуемые)
+    this.bookGeo = new THREE.BoxGeometry(1, 1, 1);
+    this.shelfGeo = new THREE.BoxGeometry(1, 1, 1);
     
-    // Geometry caches
-    this.bookGeometries = [];
+    // Материалы
+    this.bookMat = new THREE.MeshStandardMaterial({ 
+      color: 0xffffff, 
+      roughness: 0.7, 
+      metalness: 0.1 
+    });
     
-    // Seeded random for consistent generation
-    this.seed = 12345;
-  }
-  
-  async init() {
-    // Create shared materials
-    this.bookshelfMaterial = new THREE.MeshStandardMaterial({
-      color: 0x3d2817,
+    this.shelfMat = new THREE.MeshStandardMaterial({ 
+      color: 0x3d2817, // Темное дерево
+      roughness: 0.9, 
+      metalness: 0.0 
+    });
+
+    this.floorMat = new THREE.MeshStandardMaterial({
+      color: 0x1a1a1a,
       roughness: 0.8,
-      metalness: 0.1
+      metalness: 0.2
     });
-    
-    // Create book materials with different colors
-    CONFIG.bookColors.forEach(color => {
-      this.bookMaterials.push(new THREE.MeshStandardMaterial({
-        color: color,
-        roughness: 0.6,
-        metalness: 0.2,
-        emissive: color,
-        emissiveIntensity: 0.1
-      }));
+
+    this.ceilingMat = new THREE.MeshStandardMaterial({
+      color: 0x0f0f0f,
+      roughness: 0.9
     });
+
+    // Пул инстансов
+    this.meshes = {}; 
     
-    // Generate book geometries with varying sizes
-    for (let i = 0; i < 20; i++) {
-      const width = 0.1 + Math.random() * 0.15;
-      const height = 0.2 + Math.random() * 0.25;
-      const depth = 0.15 + Math.random() * 0.1;
-      
-      this.bookGeometries.push(
-        new THREE.BoxGeometry(width, height, depth)
-      );
-    }
-    
-    // Generate initial chunks around origin
-    this.updateChunks(new THREE.Vector3(0, 0, 0));
-    
-    console.log('✅ ChunkManager initialized');
+    // Настройки
+    this.chunkSize = CONFIG.performance.chunkSize;
+    this.blockSize = CONFIG.world.blocksize;
+    this.renderDistance = CONFIG.performance.renderDistances[1];
   }
-  
-  /**
-   * Seeded random number generator
-   */
-  seededRandom(x, z, offset = 0) {
-    let n = x * 3711 + z * 65537 + offset * 1013904223;
-    n = (n ^ (n >> 13)) * 1274126177;
-    return ((n ^ (n >> 16)) & 0x7fffffff) / 0x7fffffff;
-  }
-  
-  /**
-   * Get chunk key from coordinates
-   */
-  getChunkKey(chunkX, chunkZ) {
-    return `${chunkX},${chunkZ}`;
-  }
-  
-  /**
-   * Parse chunk key to coordinates
-   */
-  parseChunkKey(key) {
-    const [x, z] = key.split(',').map(Number);
-    return { x, z };
-  }
-  
-  /**
-   * Generate a single chunk
-   */
-  generateChunk(chunkX, chunkZ) {
-    const chunkGroup = new THREE.Group();
-    chunkGroup.position.set(
-      chunkX * this.chunkSize,
-      0,
-      chunkZ * this.chunkSize
-    );
-    
-    const booksPerShelf = 8;
-    const shelvesPerColumn = 6;
-    const aisleWidth = 4;
-    const shelfDepth = 0.4;
-    
-    // Create bookshelf columns along the chunk
-    for (let x = 0; x < this.chunkSize; x += aisleWidth) {
-      for (let z = 0; z < this.chunkSize; z += aisleWidth) {
-        // Use seeded random to determine if this position has shelves
-        const rand = this.seededRandom(chunkX, chunkZ, x * 1000 + z);
+
+  update(playerPosition) {
+    const currentChunkX = Math.floor(playerPosition.x / this.chunkSize);
+    const currentChunkZ = Math.floor(playerPosition.z / this.chunkSize);
+
+    const newActiveChunks = new Set();
+    const radius = Math.ceil(this.renderDistance / this.chunkSize);
+
+    // Определяем активные чанки
+    for (let x = -radius; x <= radius; x++) {
+      for (let z = -radius; z <= radius; z++) {
+        const cx = currentChunkX + x;
+        const cz = currentChunkZ + z;
+        const key = `${cx},${cz}`;
         
-        if (rand > 0.3) {
-          // Create bookshelf column
-          const shelfX = x - this.chunkSize / 2;
-          const shelfZ = z - this.chunkSize / 2;
-          
-          // Determine orientation (0 = along X, 1 = along Z)
-          const orientation = this.seededRandom(chunkX, chunkZ, x + z) > 0.5 ? 0 : 1;
-          
-          // Create multiple shelves vertically
-          for (let shelf = 0; shelf < shelvesPerColumn; shelf++) {
-            const shelfY = 0.5 + shelf * 0.8;
-            
-            // Shelf base
-            const shelfLength = aisleWidth * 0.8;
-            const shelfBase = new THREE.Mesh(
-              new THREE.BoxGeometry(
-                orientation === 0 ? shelfLength : shelfDepth,
-                0.05,
-                orientation === 0 ? shelfDepth : shelfLength
-              ),
-              this.bookshelfMaterial
-            );
-            shelfBase.position.set(shelfX, shelfY, shelfZ);
-            chunkGroup.add(shelfBase);
-            
-            // Add books on shelf
-            const bookCount = Math.floor(booksPerShelf * (0.7 + this.seededRandom(chunkX, chunkZ, shelf) * 0.3));
-            
-            for (let b = 0; b < bookCount; b++) {
-              const bookGeoIndex = Math.floor(this.seededRandom(chunkX, chunkZ, b) * this.bookGeometries.length);
-              const bookMatIndex = Math.floor(this.seededRandom(chunkX, chunkZ, b + 1) * this.bookMaterials.length);
-              
-              const book = new THREE.Mesh(
-                this.bookGeometries[bookGeoIndex],
-                this.bookMaterials[bookMatIndex]
-              );
-              
-              const offset = (b - bookCount / 2) * 0.12;
-              const bookX = orientation === 0 ? shelfX + offset : shelfX + (this.seededRandom(chunkX, chunkZ, b) - 0.5) * shelfDepth * 0.5;
-              const bookZ = orientation === 0 ? shelfZ + (this.seededRandom(chunkX, chunkZ, b) - 0.5) * shelfDepth * 0.5 : shelfZ + offset;
-              
-              book.position.set(bookX, shelfY + 0.3, bookZ);
-              
-              // Slight rotation variation
-              book.rotation.y = (this.seededRandom(chunkX, chunkZ, b + 2) - 0.5) * 0.3;
-              book.rotation.z = (this.seededRandom(chunkX, chunkZ, b + 3) - 0.5) * 0.1;
-              book.rotation.x = (this.seededRandom(chunkX, chunkZ, b + 4) - 0.5) * 0.1;
-              
-              // Store metadata for interaction
-              book.userData = {
-                isBook: true,
-                originalColor: this.bookMaterials[bookMatIndex].color.clone(),
-                chunkKey: this.getChunkKey(chunkX, chunkZ)
-              };
-              
-              chunkGroup.add(book);
-            }
-          }
-        }
-      }
-    }
-    
-    // Add some floating books for atmosphere
-    const floatingBookCount = 5;
-    for (let i = 0; i < floatingBookCount; i++) {
-      const bookGeoIndex = Math.floor(this.seededRandom(chunkX, chunkZ, i + 100) * this.bookGeometries.length);
-      const bookMatIndex = Math.floor(this.seededRandom(chunkX, chunkZ, i + 101) * this.bookMaterials.length);
-      
-      const floatingBook = new THREE.Mesh(
-        this.bookGeometries[bookGeoIndex],
-        this.bookMaterials[bookMatIndex].clone()
-      );
-      
-      floatingBook.position.set(
-        (this.seededRandom(chunkX, chunkZ, i + 102) - 0.5) * this.chunkSize * 0.8,
-        3 + this.seededRandom(chunkX, chunkZ, i + 103) * 3,
-        (this.seededRandom(chunkX, chunkZ, i + 104) - 0.5) * this.chunkSize * 0.8
-      );
-      
-      floatingBook.rotation.set(
-        this.seededRandom(chunkX, chunkZ, i + 105) * Math.PI,
-        this.seededRandom(chunkX, chunkZ, i + 106) * Math.PI,
-        this.seededRandom(chunkX, chunkZ, i + 107) * Math.PI
-      );
-      
-      floatingBook.userData = {
-        isFloatingBook: true,
-        floatSpeed: 0.5 + this.seededRandom(chunkX, chunkZ, i + 108) * 0.5,
-        floatOffset: this.seededRandom(chunkX, chunkZ, i + 109) * Math.PI * 2
-      };
-      
-      // Make it emissive for glow effect
-      floatingBook.material.emissiveIntensity = 0.3;
-      
-      chunkGroup.add(floatingBook);
-    }
-    
-    return chunkGroup;
-  }
-  
-  /**
-   * Update chunks based on camera position
-   */
-  updateChunks(cameraPosition) {
-    const currentChunkX = Math.floor(cameraPosition.x / this.chunkSize);
-    const currentChunkZ = Math.floor(cameraPosition.z / this.chunkSize);
-    const renderRadius = Math.ceil(this.renderDistance / this.chunkSize);
-    
-    const activeKeys = new Set();
-    
-    // Generate/load chunks within render distance
-    for (let x = -renderRadius; x <= renderRadius; x++) {
-      for (let z = -renderRadius; z <= renderRadius; z++) {
-        const chunkX = currentChunkX + x;
-        const chunkZ = currentChunkZ + z;
-        const key = this.getChunkKey(chunkX, chunkZ);
-        
-        activeKeys.add(key);
-        
+        // Проверка по расстоянию (круглая зона загрузки)
+        const dist = Math.sqrt((x * this.chunkSize)**2 + (z * this.chunkSize)**2);
+        if (dist > this.renderDistance) continue;
+
+        newActiveChunks.add(key);
         if (!this.chunks.has(key)) {
-          const chunk = this.generateChunk(chunkX, chunkZ);
-          this.scene.add(chunk);
-          this.chunks.set(key, chunk);
+          this.createChunk(cx, cz);
         }
       }
     }
-    
-    // Unload chunks outside render distance
-    for (const [key, chunk] of this.chunks) {
-      if (!activeKeys.has(key)) {
-        this.scene.remove(chunk);
-        
-        // Clean up geometries and materials
-        chunk.traverse((child) => {
-          if (child.geometry) {
-            child.geometry.dispose();
-          }
-        });
-        
-        this.chunks.delete(key);
+
+    // Выгрузка старых чанков
+    for (const key of this.activeChunks) {
+      if (!newActiveChunks.has(key)) {
+        this.destroyChunk(key);
       }
     }
+
+    this.activeChunks = newActiveChunks;
   }
-  
-  /**
-   * Main update loop
-   */
-  update(deltaTime, cameraPosition) {
-    this.updateChunks(cameraPosition);
+
+  createChunk(cx, cz) {
+    const key = `${cx},${cz}`;
+    const offsetX = cx * this.chunkSize;
+    const offsetZ = cz * this.chunkSize;
+
+    const chunkGroup = new THREE.Group();
+    chunkGroup.position.set(offsetX, 0, offsetZ);
+
+    // 1. Генерация пола и потолка (на весь чанк)
+    this.addFloorCeiling(chunkGroup, this.chunkSize);
+
+    // 2. Генерация стеллажей и книг
+    // Сетка блоков внутри чанка
+    const blocksPerSide = Math.floor(this.chunkSize / this.blockSize);
     
-    // Animate floating books
-    const time = performance.now() * 0.001;
-    this.chunks.forEach((chunk) => {
-      chunk.traverse((child) => {
-        if (child.userData.isFloatingBook) {
-          child.position.y += Math.sin(time * child.userData.floatSpeed + child.userData.floatOffset) * 0.002;
-          child.rotation.y += deltaTime * 0.2;
+    // Данные для инстансинга
+    const shelfData = [];
+    const bookData = [];
+
+    for (let bx = 0; bx < blocksPerSide; bx++) {
+      for (let bz = 0; bz < blocksPerSide; bz++) {
+        // Простая шахматная логика или логика коридоров
+        // Здесь: создаем "острова" стеллажей с коридорами вокруг
+        // Если (bx + bz) % 2 !== 0 -> тут проход, иначе стеллажи
+        
+        const isCorridor = (bx + bz) % 2 !== 0;
+        
+        if (!isCorridor) {
+          // Координаты центра блока стеллажа
+          const blockX = bx * this.blockSize + this.blockSize / 2;
+          const blockZ = bz * this.blockSize + this.blockSize / 2;
+          
+          this.generateShelfBlock(blockX, blockZ, shelfData, bookData);
         }
+      }
+    }
+
+    // Создаем InstancedMesh для полок
+    if (shelfData.length > 0) {
+      const mesh = new THREE.InstancedMesh(this.shelfGeo, this.shelfMat, shelfData.length);
+      const matrix = new THREE.Matrix4();
+      const dummy = new THREE.Object3D();
+
+      shelfData.forEach(d => {
+        dummy.position.set(d.x, d.y, d.z);
+        dummy.scale.set(d.w, d.h, d.d);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(d.i, dummy.matrix);
       });
+      mesh.instanceMatrix.needsUpdate = true;
+      chunkGroup.add(mesh);
+    }
+
+    // Создаем InstancedMesh для книг
+    if (bookData.length > 0) {
+      const mesh = new THREE.InstancedMesh(this.bookGeo, this.bookMat, bookData.length);
+      const matrix = new THREE.Matrix4();
+      const dummy = new THREE.Object3D();
+      const color = new THREE.Color();
+
+      bookData.forEach(d => {
+        dummy.position.set(d.x, d.y, d.z);
+        dummy.rotation.set(d.rx, d.ry, d.rz);
+        dummy.scale.set(d.w, d.h, d.d);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(d.i, dummy.matrix);
+        
+        // Вариативность цветов книг
+        const hue = 0.08 + Math.random() * 0.05; // Золотисто-коричневые тона
+        const sat = 0.3 + Math.random() * 0.4;
+        const val = 0.4 + Math.random() * 0.4;
+        color.setHSL(hue, sat, val);
+        mesh.setColorAt(d.i, color);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      
+      // Добавляем данные для интерактивности (упрощенно)
+      mesh.userData.isBooks = true;
+      chunkGroup.add(mesh);
+    }
+
+    this.chunks.set(key, chunkGroup);
+    this.scene.add(chunkGroup);
+  }
+
+  addFloorCeiling(group, size) {
+    // Пол
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(size, size),
+      this.floorMat
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = 0;
+    floor.receiveShadow = true;
+    group.add(floor);
+
+    // Потолок
+    const ceiling = new THREE.Mesh(
+      new THREE.PlaneGeometry(size, size),
+      this.ceilingMat
+    );
+    ceiling.rotation.x = Math.PI / 2;
+    ceiling.position.y = CONFIG.world.floorHeight;
+    ceiling.receiveShadow = true;
+    group.add(ceiling);
+  }
+
+  generateShelfBlock(centerX, centerZ, shelfData, bookData) {
+    const shelfDepth = CONFIG.world.shelfDepth;
+    const shelfUnitWidth = 1.0; // Базовая ширина секции
+    const shelfHeightUnit = CONFIG.world.shelfHeight;
+    const totalHeight = CONFIG.world.floorHeight;
+    const levels = Math.floor(totalHeight / shelfHeightUnit);
+
+    // Стеллаж представляет собой две стенки и полки между ними
+    // Для упрощения и оптимизации делаем "монолитные" колонны полок
+    
+    const blockHalf = this.blockSize / 2;
+    
+    // Генерируем 4 стороны квадрата стеллажа (или крест)
+    // Для простоты: две длинные полки вдоль X и две вдоль Z в центре блока
+    
+    const positions = [
+      { axis: 'x', x: centerX, z: centerZ - 1.5, w: 6, d: shelfDepth },
+      { axis: 'x', x: centerX, z: centerZ + 1.5, w: 6, d: shelfDepth },
+      { axis: 'z', x: centerX - 1.5, z: centerZ, w: shelfDepth, d: 6 },
+      { axis: 'z', x: centerX + 1.5, z: centerZ, w: shelfDepth, d: 6 },
+    ];
+
+    let sIndex = 0;
+    let bIndex = bookData.length;
+
+    positions.forEach(pos => {
+      // Создаем полки (горизонтальные пластины)
+      for (let l = 1; l < levels; l++) {
+        const y = l * shelfHeightUnit;
+        // Добавляем полку как инстанс
+        shelfData.push({
+          i: sIndex++,
+          x: pos.axis === 'x' ? centerX : pos.x,
+          y: y,
+          z: pos.axis === 'z' ? centerZ : pos.z,
+          w: pos.axis === 'x' ? pos.w : shelfDepth,
+          h: 0.05, // Толщина полки
+          d: pos.axis === 'x' ? shelfDepth : pos.d
+        });
+
+        // Заполняем книгу над этой полкой
+        if (Math.random() < CONFIG.world.bookDensity) {
+          this.fillBooksOnShelf(
+            pos.axis, 
+            pos.axis === 'x' ? centerX : pos.x, 
+            y + shelfHeightUnit/2, 
+            pos.axis === 'z' ? centerZ : pos.z,
+            pos.axis === 'x' ? pos.w : shelfDepth,
+            pos.axis === 'x' ? shelfDepth : pos.d,
+            bookData,
+            bIndex
+          );
+          bIndex = bookData.length;
+        }
+      }
+      
+      // Вертикальные стойки (упрощенно - просто длинные бруски по краям)
+      // Можно добавить в shelfData, но для экономии оставим только полки и книги
     });
   }
-  
-  /**
-   * Get count of active chunks
-   */
-  getActiveChunkCount() {
-    return this.chunks.size;
-  }
-  
-  /**
-   * Set render distance
-   */
-  setRenderDistance(distance) {
-    this.renderDistance = distance;
-  }
-  
-  /**
-   * Get all interactive objects in range
-   */
-  getInteractables(cameraPosition, range = 10) {
-    const interactables = [];
-    const currentChunkX = Math.floor(cameraPosition.x / this.chunkSize);
-    const currentChunkZ = Math.floor(cameraPosition.z / this.chunkSize);
+
+  fillBooksOnShelf(axis, x, y, z, lenW, lenD, bookData, startIndex) {
+    // Параметры книги
+    const bookW = 0.03; // Толщина
+    const bookH = 0.25 + Math.random() * 0.1; // Высота
+    const bookD = 0.15 + Math.random() * 0.1; // Глубина
+
+    // Сколько книг влезает
+    const count = Math.floor(lenW / (bookW + 0.01));
     
-    // Check nearby chunks
-    for (let x = -1; x <= 1; x++) {
-      for (let z = -1; z <= 1; z++) {
-        const key = this.getChunkKey(currentChunkX + x, currentChunkZ + z);
-        const chunk = this.chunks.get(key);
-        
-        if (chunk) {
-          chunk.traverse((child) => {
-            if (child.userData.isBook || child.userData.isFloatingBook) {
-              const distance = child.position.distanceTo(cameraPosition);
-              if (distance < range) {
-                interactables.push({ object: child, distance });
-              }
-            }
-          });
-        }
+    let idx = startIndex;
+
+    for (let i = 0; i < count; i++) {
+      if (Math.random() > 0.95) continue; // Пропуски в ряду
+
+      let bx, bz, brY, bw, bd;
+
+      if (axis === 'x') {
+        // Полка вдоль X
+        bx = x - lenW/2 + bookW/2 + i * (bookW + 0.01);
+        bz = z + (Math.random() - 0.5) * (lenD - bookD);
+        brY = (Math.random() - 0.5) * 0.2; // Небольшой наклон
+        bw = bookW;
+        bd = bookD;
+      } else {
+        // Полка вдоль Z
+        bz = z - lenD/2 + bookW/2 + i * (bookW + 0.01);
+        bx = x + (Math.random() - 0.5) * (lenW - bookD);
+        brY = (Math.random() - 0.5) * 0.2;
+        bw = bookD;
+        bd = bookW;
       }
+
+      bookData.push({
+        i: idx++,
+        x: bx,
+        y: y,
+        z: bz,
+        w: bw,
+        h: bookH,
+        d: bd,
+        rx: 0,
+        ry: brY,
+        rz: (Math.random() - 0.5) * 0.1
+      });
     }
-    
-    return interactables.sort((a, b) => a.distance - b.distance);
+  }
+
+  destroyChunk(key) {
+    const chunk = this.chunks.get(key);
+    if (chunk) {
+      this.scene.remove(chunk);
+      // Очистка памяти (геометрии и материалы общие, не удаляем)
+      // Удаляем только инстанс-меши если нужно, но здесь они собраны в группе
+      this.chunks.delete(key);
+    }
+  }
+
+  dispose() {
+    this.chunks.forEach((chunk, key) => this.destroyChunk(key));
+    this.bookGeo.dispose();
+    this.shelfGeo.dispose();
+    this.bookMat.dispose();
+    this.shelfMat.dispose();
+    this.floorMat.dispose();
+    this.ceilingMat.dispose();
   }
 }
