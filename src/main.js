@@ -1,377 +1,175 @@
-/**
- * Interstellar Library - Infinite WebGL Experience
- * Main entry point
- * 
- * A procedurally generated infinite library inspired by the Tesseract scene from Interstellar
- * Features: First-person flight, chunk-based generation, interactive books, particle effects
- */
-
 import * as THREE from 'three';
-import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { FilmPass } from 'three/addons/postprocessing/FilmPass.js';
-import { VignetteShader } from 'three/addons/shaders/VignetteShader.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+// import { FilmPass } from 'three/examples/jsm/postprocessing/FilmPass.js'; // Удалено для оптимизации
+
+import { CONFIG, getPreset } from './config.js';
+import { InputController } from './InputController.js';
 import { ChunkManager } from './ChunkManager.js';
 import { ParticleSystem } from './ParticleSystem.js';
 import { AudioController } from './AudioController.js';
-import { InputController } from './InputController.js';
-import { CONFIG } from './config.js';
 
-class InterstellarLibrary {
+class App {
   constructor() {
-    this.container = document.getElementById('canvas-container');
-    this.loadingScreen = document.getElementById('loading-screen');
-    this.loadingBar = document.getElementById('loading-bar');
-    this.loadingText = document.getElementById('loading-text');
-    this.fpsCounter = document.getElementById('fps-counter');
-    this.startPrompt = document.getElementById('start-prompt');
+    this.container = document.getElementById('app');
+    this.width = window.innerWidth;
+    this.height = window.innerHeight;
     
-    // Core Three.js components
-    this.scene = null;
-    this.camera = null;
-    this.renderer = null;
-    this.composer = null;
-    this.controls = null;
+    // Применение пресета настроек
+    this.settings = getPreset(CONFIG.performance.quality);
     
-    // Game systems
-    this.chunkManager = null;
-    this.particleSystem = null;
-    this.audioController = null;
-    this.inputController = null;
+    this.initRenderer();
+    this.initScene();
+    this.initCamera();
+    this.initPostProcessing();
+    this.initControllers();
+    this.initWorld();
+    this.initUI();
     
-    // State
-    this.isInitialized = false;
-    this.isPlaying = false;
-    this.lastTime = 0;
-    this.frameCount = 0;
-    this.fps = 0;
-    this.deltaTime = 0;
+    this.clock = new THREE.Clock();
+    this.animate = this.animate.bind(this);
+    requestAnimationFrame(this.animate);
     
-    // Performance tracking
-    this.activeChunks = 0;
-    this.drawCalls = 0;
-    
-    // Settings
-    this.settings = {
-      speed: 0.5,
-      bloomStrength: 0.6,
-      particlesEnabled: true,
-      soundEnabled: true,
-      collisionsEnabled: false
-    };
+    window.addEventListener('resize', this.onResize.bind(this));
   }
-  
-  async init() {
-    try {
-      this.updateLoadingProgress(10, 'Initializing renderer...');
-      await this.initRenderer();
-      
-      this.updateLoadingProgress(30, 'Setting up camera...');
-      await this.initCamera();
-      
-      this.updateLoadingProgress(40, 'Creating scene...');
-      await this.initScene();
-      
-      this.updateLoadingProgress(50, 'Loading controls...');
-      await this.initControls();
-      
-      this.updateLoadingProgress(60, 'Initializing lighting...');
-      await this.initLighting();
-      
-      this.updateLoadingProgress(70, 'Setting up post-processing...');
-      await this.initPostProcessing();
-      
-      this.updateLoadingProgress(80, 'Loading game systems...');
-      await this.initGameSystems();
-      
-      this.updateLoadingProgress(90, 'Finalizing...');
-      await this.setupEventListeners();
-      
-      this.updateLoadingProgress(100, 'Ready!');
-      
-      setTimeout(() => {
-        this.loadingScreen.classList.add('hidden');
-        this.isInitialized = true;
-        this.animate();
-      }, 500);
-      
-      console.log('✅ Interstellar Library initialized successfully');
-    } catch (error) {
-      console.error('❌ Initialization failed:', error);
-      this.loadingText.textContent = 'Failed to initialize. Please refresh.';
-      this.loadingText.style.color = '#ff4444';
-    }
-  }
-  
-  updateLoadingProgress(percent, text) {
-    this.loadingBar.style.width = `${percent}%`;
-    this.loadingText.textContent = text;
-  }
-  
-  async initRenderer() {
-    const pixelRatio = Math.min(window.devicePixelRatio, 2);
-    
-    this.renderer = new THREE.WebGLRenderer({
-      antialias: CONFIG.antialias,
+
+  initRenderer() {
+    this.renderer = new THREE.WebGLRenderer({ 
       powerPreference: 'high-performance',
-      alpha: false,
-      depth: true,
-      stencil: false,
-      failIfMajorPerformanceCaveat: false
+      antialias: this.settings.performance.antialias // FALSE для оптимизации
     });
-    
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(pixelRatio);
-    this.renderer.shadowMap.enabled = CONFIG.shadows;
+    this.renderer.setSize(this.width, this.height);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.settings.performance.pixelRatio));
+    this.renderer.shadowMap.enabled = false; // Тени отключены для производительности
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    
     this.container.appendChild(this.renderer.domElement);
-    
-    // Handle resize
-    window.addEventListener('resize', () => this.onWindowResize());
   }
-  
-  async initCamera() {
-    const aspect = window.innerWidth / window.innerHeight;
-    this.camera = new THREE.PerspectiveCamera(
-      CONFIG.fov,
-      aspect,
-      CONFIG.nearClip,
-      CONFIG.farClip
-    );
-    this.camera.position.set(0, CONFIG.cameraHeight, 5);
-  }
-  
-  async initScene() {
+
+  initScene() {
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(CONFIG.backgroundColor);
-    this.scene.fog = new THREE.FogExp2(
-      CONFIG.backgroundColor,
-      CONFIG.fogDensity
-    );
+    this.scene.background = new THREE.Color(CONFIG.visuals.fogColor);
+    this.scene.fog = new THREE.FogExp2(CONFIG.visuals.fogColor, CONFIG.visuals.fogDensity);
   }
-  
-  async initControls() {
-    this.controls = new PointerLockControls(this.camera, document.body);
-    
-    this.startPrompt.addEventListener('click', () => {
-      if (!this.isPlaying) {
-        this.controls.lock();
-      }
-    });
-    
-    this.controls.addEventListener('lock', () => {
-      this.isPlaying = true;
-      this.startPrompt.classList.add('hidden');
-      this.audioController?.resume();
-    });
-    
-    this.controls.addEventListener('unlock', () => {
-      this.isPlaying = false;
-      this.startPrompt.classList.remove('hidden');
-    });
+
+  initCamera() {
+    this.camera = new THREE.PerspectiveCamera(
+      CONFIG.camera.fov,
+      this.width / this.height,
+      CONFIG.camera.near,
+      this.settings.performance.farClip
+    );
+    this.camera.position.set(0, 1.7, 5); // Стартовая позиция
   }
-  
-  async initLighting() {
-    // Ambient light for base illumination
-    const ambientLight = new THREE.HemisphereLight(
-      CONFIG.lighting.ambientTop,
-      CONFIG.lighting.ambientBottom,
-      CONFIG.lighting.ambientIntensity
-    );
-    this.scene.add(ambientLight);
-    
-    // Warm directional light for bookshelf highlights
-    const dirLight = new THREE.DirectionalLight(
-      CONFIG.lighting.directionalColor,
-      CONFIG.lighting.directionalIntensity
-    );
-    dirLight.position.set(10, 20, 10);
-    if (CONFIG.shadows) {
-      dirLight.castShadow = true;
-      dirLight.shadow.mapSize.width = 1024;
-      dirLight.shadow.mapSize.height = 1024;
-    }
-    this.scene.add(dirLight);
-    
-    // Point lights for atmospheric glow
-    const pointLight1 = new THREE.PointLight(
-      CONFIG.lighting.pointColor1,
-      CONFIG.lighting.pointIntensity1,
-      50
-    );
-    pointLight1.position.set(-10, 5, -10);
-    this.scene.add(pointLight1);
-    
-    const pointLight2 = new THREE.PointLight(
-      CONFIG.lighting.pointColor2,
-      CONFIG.lighting.pointIntensity2,
-      50
-    );
-    pointLight2.position.set(10, 8, -15);
-    this.scene.add(pointLight2);
-  }
-  
-  async initPostProcessing() {
+
+  initPostProcessing() {
     this.composer = new EffectComposer(this.renderer);
     
-    // Render pass
     const renderPass = new RenderPass(this.scene, this.camera);
     this.composer.addPass(renderPass);
-    
-    // Bloom pass for glow effect
-    this.bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(window.innerWidth, window.innerHeight),
-      this.settings.bloomStrength,
-      0.5,
-      0.85
+
+    // Bloom (свечение)
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(this.width, this.height),
+      CONFIG.visuals.bloomStrength,
+      CONFIG.visuals.bloomRadius,
+      CONFIG.visuals.bloomThreshold
     );
-    this.composer.addPass(this.bloomPass);
-    
-    // Vignette pass for cinematic look
-    const vignettePass = new ShaderPass(VignetteShader);
-    vignettePass.uniforms['darkness'].value = 0.4;
-    vignettePass.uniforms['offset'].value = 0.6;
-    this.composer.addPass(vignettePass);
-    
-    // Film pass for grain effect
-    const filmPass = new FilmPass(
-      0.15,  // noise intensity
-      0.5,   // scanline intensity
-      648,   // scanline count
-      false  // grayscale
-    );
-    this.composer.addPass(filmPass);
+    this.composer.addPass(bloomPass);
+
+    // FilmPass удален для повышения FPS
   }
-  
-  async initGameSystems() {
-    this.chunkManager = new ChunkManager(this.scene, this.camera, this.settings);
-    await this.chunkManager.init();
-    
-    this.particleSystem = new ParticleSystem(this.scene, this.camera, this.settings);
-    await this.particleSystem.init();
-    
-    this.audioController = new AudioController(this.settings);
-    await this.audioController.init();
-    
-    this.inputController = new InputController(
-      this.camera,
-      this.controls,
-      this.settings,
-      this.chunkManager,
-      this.particleSystem,
-      this.audioController
-    );
-    await this.inputController.init();
+
+  initControllers() {
+    this.input = new InputController(this.camera);
+    this.audio = new AudioController();
   }
-  
-  async setupEventListeners() {
-    // UI Controls
-    document.getElementById('speed-slider').addEventListener('input', (e) => {
-      this.settings.speed = e.target.value / 100;
-    });
+
+  initWorld() {
+    this.chunkManager = new ChunkManager(this.scene);
+    this.particles = new ParticleSystem(this.scene, this.camera);
     
-    document.getElementById('bloom-slider').addEventListener('input', (e) => {
-      this.settings.bloomStrength = e.target.value / 100;
-      this.bloomPass.strength = this.settings.bloomStrength;
-    });
+    // Освещение
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x000000, CONFIG.visuals.ambientLight);
+    this.scene.add(hemiLight);
+
+    // Точечные источники света (фонари в библиотеке)
+    // Генерируются процедурно вместе с чанками или статично
+    const pointLight = new THREE.PointLight(0xffaa00, CONFIG.visuals.pointLightIntensity, 20);
+    pointLight.position.set(0, 4, 0);
+    this.scene.add(pointLight);
+  }
+
+  initUI() {
+    // Минималистичный UI
+    const ui = document.createElement('div');
+    ui.style.position = 'absolute';
+    ui.style.top = '10px';
+    ui.style.left = '10px';
+    ui.style.color = '#fff';
+    ui.style.fontFamily = 'monospace';
+    ui.style.pointerEvents = 'none';
+    ui.innerHTML = `
+      <h1>INTERSTELLAR LIBRARY</h1>
+      <p>FPS: <span id="fps">0</span></p>
+      <p>Chunks: <span id="chunks">0</span></p>
+      <p>Quality: ${CONFIG.performance.quality}</p>
+      <p style="font-size: 0.8em; opacity: 0.7">WASD - Move | Mouse - Look | Shift - Sprint</p>
+    `;
+    document.body.appendChild(ui);
     
-    document.getElementById('particles-toggle').addEventListener('click', (e) => {
-      this.settings.particlesEnabled = !this.settings.particlesEnabled;
-      e.target.classList.toggle('active');
-      e.target.textContent = this.settings.particlesEnabled ? 'ON' : 'OFF';
-      this.particleSystem.setEnabled(this.settings.particlesEnabled);
-    });
-    
-    document.getElementById('sound-toggle').addEventListener('click', (e) => {
-      this.settings.soundEnabled = !this.settings.soundEnabled;
-      e.target.classList.toggle('active');
-      e.target.textContent = this.settings.soundEnabled ? 'ON' : 'OFF';
-      this.audioController.setMasterVolume(this.settings.soundEnabled ? 1 : 0);
-    });
-    
-    document.getElementById('collision-toggle').addEventListener('click', (e) => {
-      this.settings.collisionsEnabled = !this.settings.collisionsEnabled;
-      e.target.classList.toggle('active');
-      e.target.textContent = this.settings.collisionsEnabled ? 'ON' : 'OFF';
+    this.uiFps = document.getElementById('fps');
+    this.uiChunks = document.getElementById('chunks');
+
+    // Клик для захвата курсора
+    document.addEventListener('click', () => {
+      this.input.lockPointer();
+      this.audio.resume();
     });
   }
-  
-  onWindowResize() {
-    const width = window.innerWidth;
-    const height = window.innerHeight;
-    
-    this.camera.aspect = width / height;
+
+  onResize() {
+    this.width = window.innerWidth;
+    this.height = window.innerHeight;
+    this.camera.aspect = this.width / this.height;
     this.camera.updateProjectionMatrix();
-    
-    this.renderer.setSize(width, height);
-    this.composer.setSize(width, height);
+    this.renderer.setSize(this.width, this.height);
+    this.composer.setSize(this.width, this.height);
   }
-  
+
   animate() {
-    requestAnimationFrame(() => this.animate());
+    requestAnimationFrame(this.animate);
     
-    const currentTime = performance.now();
-    this.deltaTime = (currentTime - this.lastTime) / 1000;
-    this.lastTime = currentTime;
+    const delta = Math.min(this.clock.getDelta(), 0.1);
+    const time = this.clock.getElapsedTime();
+
+    // Обновление ввода и физики
+    this.input.update(delta);
     
-    // Cap delta time to prevent physics issues
-    const cappedDeltaTime = Math.min(this.deltaTime, 0.1);
+    // Перемещение камеры
+    this.camera.position.add(this.input.velocity.clone().multiplyScalar(delta));
     
-    if (this.isInitialized) {
-      // Update systems
-      this.inputController.update(cappedDeltaTime);
-      this.chunkManager.update(cappedDeltaTime, this.camera.position);
-      this.particleSystem.update(cappedDeltaTime, this.camera.position);
-      
-      // Render
-      if (this.composer) {
-        this.composer.render();
-      } else {
-        this.renderer.render(this.scene, this.camera);
-      }
-      
-      // Update FPS counter
-      this.updateFPS();
-    }
-  }
-  
-  updateFPS() {
-    this.frameCount++;
-    const currentTime = performance.now();
-    
-    if (currentTime - this.lastFpsTime >= 1000) {
-      this.fps = this.frameCount;
-      this.frameCount = 0;
-      this.lastFpsTime = currentTime;
-      
-      this.activeChunks = this.chunkManager?.getActiveChunkCount() || 0;
-      this.fpsCounter.textContent = `FPS: ${this.fps} | Chunks: ${this.activeChunks}`;
-      
-      // Auto-adjust quality based on FPS
-      this.autoAdjustQuality();
-    }
-  }
-  
-  autoAdjustQuality() {
-    if (this.fps < 30 && CONFIG.qualityLevel > 0) {
-      // Reduce quality
-      CONFIG.qualityLevel--;
-      this.chunkManager?.setRenderDistance(CONFIG.renderDistances[CONFIG.qualityLevel]);
-    } else if (this.fps > 55 && CONFIG.qualityLevel < 2) {
-      // Increase quality
-      CONFIG.qualityLevel++;
-      this.chunkManager?.setRenderDistance(CONFIG.renderDistances[CONFIG.qualityLevel]);
+    // Ограничение высоты
+    this.camera.position.y = Math.max(0.5, Math.min(this.camera.position.y, CONFIG.world.floorHeight - 0.5));
+
+    // Обновление мира
+    this.chunkManager.update(this.camera.position);
+    this.particles.update(delta, this.camera.position);
+
+    // Рендер
+    this.composer.render();
+
+    // UI Stats
+    if (time % 0.5 < 0.02) {
+      this.uiFps.textContent = Math.round(1 / delta);
+      this.uiChunks.textContent = this.chunkManager.activeChunks.size;
     }
   }
 }
 
-// Initialize application
-const app = new InterstellarLibrary();
-app.init();
+// Запуск
+window.addEventListener('DOMContentLoaded', () => {
+  new App();
+});
